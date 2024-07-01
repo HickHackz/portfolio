@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>CS 418 Texture project</title>
+    <script src="cs418helpers.js"></script><!-- handles controls -->
+
+
+
+
+<script>// Placeholder script; edit or move to separate file
+
+
+//Global animation id for switching animations
+
+
+//calculates dot product
+function dotProduct(a,b){
+  const result = a.reduce((acc, cur, index)=>{
+    acc += (cur * b[index]);
+    return acc;
+  }, 0);
+  return result;
+}
+
+//Generates faults by looping over z axis and altering z coordinates
+//Lots of code commented out for my attempt to do distance based fault weighting, which didn't work
+//Calculating the intersection point was suprisingly hard
+function generate_faults(data) {
+    //generate random point and vector
+
+    let position = [Math.random()*glresolution, Math.random()*glresolution]
+    let angle = Math.random() * 2 * Math.PI
+
+    let vec = [Math.cos(angle), Math.sin(angle)]
+
+   // let vec2 = [Math.sin(angle), -Math.cos(angle)]
+
+    //let position1 = [position[0]+-glresolution*vec[0]*2,position[1]+-glresolution*vec[1]*2]
+    //let position2 = [position[0]+glresolution*vec[0]*2,position[1]+glresolution*vec[1]*2]
+
+    //Keep track of smallest and largest z values, and print them to the console.
+    
+    for (let i=0; i<data.attributes.position.length; i+=1) {
+        let p = data.attributes.position[i]
+        
+        //let p1 = [p[0]+-glresolution*vec2[0]*2,p[1]+-glresolution*vec2[1]*2]
+        //let p2 = [p[0]+glresolution*vec2[0]*2,p[1]+glresolution*vec2[1]*2]
+
+      //  let intersection = math.intersect(p1, p2, position1, position2)
+
+        //let distance = math.sqrt(math.pow((intersection[1]-p[1]),2)+ math.pow((intersection[0]-p[0]),2))
+
+        //let r = math.pow((1-math.pow(distance/glresolution,2)),2)
+        let subtrand = [data.attributes.position[i][0]-position[0], data.attributes.position[i][1]-position[1]]
+
+        let side = dotProduct(subtrand, vec)
+
+        if (side>0.0) { //Side one of the fault
+            data.attributes.position[i][2] += .25 /window.slices/1.9
+        }
+        else {
+            data.attributes.position[i][2] -= .25 /window.slices/1.9
+        }
+        if (data.attributes.position[i][2] > z_max) z_max = data.attributes.position[i][2]
+
+        if (data.attributes.position[i][2] < z_min) z_min = data.attributes.position[i][2]
+
+        
+    }
+
+}
+
+//Adds normal attribute for lighting effects
+function addNormals(data) {
+    let normals = new Array(data.attributes.position.length)
+    for(let i=0; i<normals.length; i+=1) normals[i] = new Array(3).fill(0)
+    for([i0,i1,i2] of data.triangles) {
+        // find the vertex positions
+        let p0 = data.attributes.position[i0]
+        let p1 = data.attributes.position[i1]
+        let p2 = data.attributes.position[i2]
+        // find the edge vectors and normal
+        let e0 = m4sub(p0,p2)
+        let e1 = m4sub(p1,p2)
+        let n = m4cross(e0,e1)
+        // loop over x, y and z
+        for(let j=0; j<3; j+=1) {
+            // add a coordinate of a normal to each of the three normals
+            normals[i0][j] += n[j]
+            normals[i1][j] += n[j]
+            normals[i2][j] += n[j]
+        }
+    }
+    for(let i=0; i<normals.length; i+=1) normals[i] = m4normalized(normals[i])
+    data.attributes.normal = normals;
+}
+
+/**
+ * Draw one frame for terrain simulation
+ */
+ function draw_blank() {
+    gl.clearColor(...IlliniBlue)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(program)
+
+    gl.bindVertexArray(geom.vao)
+   
+    gl.uniform1f(gl.getUniformLocation(program, 'glresolution'),(glresolution))
+
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'p'), false, p)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'mv'), false, m4mult(v,m))
+
+    let bindPoint = gl.getUniformLocation(program, 'texture')
+    gl.uniform1i(bindPoint, 0) // where `slot` is same it was in step 2 above
+
+
+    gl.drawElements(geom.mode, geom.count, geom.type, 0)
+}
+
+//Calculates view matrix cooridnates for truckin gleft and right
+function set_viewMatrix_truck(distance) {
+    // Calculate the n camera axis
+    let n = [eye_coord[0]-center_coord[0], eye_coord[1]-center_coord[1], eye_coord[2]-center_coord[2]]
+    n = m4normalized(n)
+
+    // Calculate the u camera axis
+    let u = m4cross(up_coord, n)
+    u = m4normalized(u)
+
+    // Scale the u axis to the desired distance to move
+    u = [u[0]*distance, u[1]*distance, u[2]*distance]
+
+    // Add the direction vector to both the eye and center positions
+    eye_coord = [eye_coord[0]+u[0], eye_coord[1]+u[1], eye_coord[2]+u[2]]
+    center_coord = [center_coord[0]+u[0], center_coord[1]+u[1], center_coord[2]+u[2]]
+}
+
+function set_viewMatrix_dolly(distance) {
+    // Calculate the n camera axis
+    let n = [eye_coord[0]-center_coord[0], eye_coord[1]-center_coord[1], eye_coord[2]-center_coord[2]]
+    n = m4normalized(n)
+    n = [n[0]*distance, n[1]*distance, n[2]*distance]
+    // Add the direction vector to both the eye and center positions
+    eye_coord = [eye_coord[0]+n[0], eye_coord[1], eye_coord[2]]
+    center_coord = [center_coord[0]+n[0], center_coord[1], center_coord[2]]
+}
+
+function set_viewMatrix_tilt(angle) {
+    // Calculate the n camera axis
+    let n = [eye_coord[0]-center_coord[0], eye_coord[1]-center_coord[1], eye_coord[2]-center_coord[2]]
+    n = m4normalized(n)
+
+    // Calculate the u camera axis
+    let u = m4cross(up_coord, n)
+    u = m4normalized(u)
+    // Add the direction vector to both the eye and center positions
+    let new_center = [center_coord[0]-eye_coord[0], center_coord[1]-eye_coord[1], center_coord[2]-eye_coord[2]]
+
+    //Create tilt rotate matrix
+
+    let rotate_matrix = m4rotAxis(u, angle)
+
+    //Multiply tilt rotate by new center, and save in new center
+    
+    new_center = m4mult(rotate_matrix, [new_center[0], new_center[1], new_center[2], 0])
+
+    //Add coordinates to translate actual center back to location of camera
+
+    center_coord = [new_center[0]+eye_coord[0], new_center[1]+eye_coord[1], new_center[2]+eye_coord[2]]
+
+    if (Math.abs(dotProduct([n[0],n[1],n[2]], up_coord)) >= .985) {
+        up_coord = m4mult(rotate_matrix, [up_coord[0], up_coord[1], up_coord[2], 0])
+    }
+
+}
+function timeStep_terrain(milliseconds) {
+    let seconds = milliseconds / 1000;
+    
+    let viewAngle = seconds/5
+    let s2 = Math.cos(seconds/2)-1
+
+    //window.v = m4mult(m4view([3*Math.cos(viewAngle),3*Math.sin(viewAngle),2], [0,0,0], [0,0,1]), m4scale(zoom_attrib))
+    
+    if (keysBeingPressed["ArrowUp"]) {
+        window.tilt_angle = window.tilt_angle + .001
+        set_viewMatrix_tilt(.01)
+    }
+    if (keysBeingPressed["ArrowDown"]) {
+        window.tilt_angle = window.tilt_angle - .001
+        set_viewMatrix_tilt(-.01)
+
+    }
+
+    
+    /*
+    if (keysBeingPressed['a']) {
+        model_position[1] = model_position[1] + .01
+        model_position[0] = model_position[0] - .01    
+    }
+    if (keysBeingPressed['d']) {
+        model_position[1] = model_position[1] - .01
+        model_position[0] = model_position[0] + .01
+    }
+    */
+    if (keysBeingPressed['w']) {
+        /*
+        eye_coord = [eye_coord[0]+.01, eye_coord[1], eye_coord[2]]
+        center_coord = [center_coord[0]+.01, center_coord[1], center_coord[2]]
+        */
+       set_viewMatrix_dolly(-.01)
+
+    }
+    if (keysBeingPressed['s']) {
+        /*
+        eye_coord = [eye_coord[0]-.01, eye_coord[1], eye_coord[2]]
+        center_coord = [center_coord[0]-.01, center_coord[1], center_coord[2]]
+        */
+        set_viewMatrix_dolly(.01)
+
+    }
+    if (keysBeingPressed['a']) {
+        set_viewMatrix_truck(-.01)    
+        //eye_coord = m4add(eye_coord, -.01)
+       // m4add(center_coord, .01)
+       //eye_coord[1] = eye_coord[1] - .01;
+
+    }
+    if (keysBeingPressed['d']) {
+        set_viewMatrix_truck(.01)    
+
+        //eye_coord[1] = eye_coord[1] + .01;
+        //center_coord = m4add(center_coord, +.01)
+    }
+
+   
+
+    window.v = m4mult(m4view([eye_coord[0], eye_coord[1], eye_coord[2]], [center_coord[0],center_coord[1],center_coord[2]], [up_coord[0],up_coord[1],up_coord[2]]), m4scale(zoom_attrib))
+
+    //let eye = [3*Math.cos(viewAngle),3*Math.sin(viewAngle),1]
+    let eye = [3,3,1]
+
+    gl.useProgram(program)
+
+    gl.uniform3fv(gl.getUniformLocation(program, 'eyedir'), new Float32Array(m4normalized(eye)))
+
+
+    
+
+
+    //window.m = m4translate(model_position[0],model_position[1],model_position[2])
+    draw_blank()
+    animationId = requestAnimationFrame(timeStep_terrain)
+}
+
+/**
+ * Compile, link, other option-independent setup
+ */
+async function setup(event) {
+    window.gl = document.querySelector('canvas').getContext('webgl2',
+        // optional configuration object: see https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/getContext
+        {antialias: false, depth:true, preserveDrawingBuffer:true}
+    )
+    let img = new Image()
+    img.crossOrigin = 'anonymous'
+    img.src = "pic.jpg"
+    console.log(img.width, img.height)
+    // to do: more setup here
+    fillScreen()
+    let vs = await fetch('blank/vs_texture.glsl').then(res => res.text())
+    let fs = await fetch('blank/fs_texture.glsl').then(res => res.text())
+    program = compileAndLinkGLSL(vs,fs)
+    //General Layout for terrain to be generated
+
+    gl.enable(gl.DEPTH_TEST)
+
+    window.m = m4ident()
+    window.v = m4ident()
+    window.p = m4ident()
+
+    let data = {
+        "triangles":[]
+        ,"attributes":{
+            "position":[]
+        }
+    }
+    
+    let n = 100
+
+    for (let i=0; i <= n; i+=1) {
+        for (let j=0; j <= n; j+=1) {
+            data.attributes.position.push([i,j,.5,1])
+        }   
+    }
+    //Using J as the offset to balance rows
+    let j = 0
+    for (let i=0; i<n*n+(n-1); i+=1) {
+        if ((i+j)%(n)==0 && i != 0 && i != 1) {
+            j-=1
+            i+=1
+        }
+        data.triangles.push([i+n+1,i+1,i])
+        data.triangles.push([i+n+2,i+n+1,i+1])
+    }
+    window.glresolution = n
+    window.z_min = .5
+    window.z_max = .5
+
+    for (window.slices = 1; window.slices<=500; window.slices+=1){
+        generate_faults(data)
+    }
+
+    addNormals(data)
+    window.geom = setupGeomery(data, program)
+
+    //window.gridsize = options.speed
+    window.zoom_attrib = 2.5
+    //Key press global data
+    window.keysBeingPressed = {}
+    window.addEventListener('keydown', event => keysBeingPressed[event.key] = true)
+    window.addEventListener('keyup', event => keysBeingPressed[event.key] = false)
+
+
+    window.eye_coord = [3, 0, 2]
+    window.center_coord = [0, 0, 0]
+    window.up_coord = [0, 0, 1]
+
+    window.tilt_angle = dotProduct(eye_coord, center_coord)
+
+    //Bind Texture
+
+    let slot = 0; // or a larger integer if this isn't the only texture
+    let texture = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + slot);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+
+    gl.texImage2D(
+        gl.TEXTURE_2D, // destination slot
+        0, // 0 means not a mipmap; >0 for mipmaps
+        gl.RGBA, // how to store it in graphics memory
+        gl.RGBA, // how it is stored in the image object
+        gl.UNSIGNED_BYTE, // size of a single pixel-color in HTML
+        img, // source data
+    );
+
+    fillScreen((w,h) => {            
+        gl.viewport(0,0, w, h)
+        window.p = m4perspNegZ(1,9, 0.7, w, h)
+        window.pending = requestAnimationFrame(timeStep_terrain)
+        animationId = window.pending
+    })
+
+
+    window.addEventListener('resize', event => {
+    fillScreen((w,h) => {            
+        gl.viewport(0,0, w, h)
+        window.p = m4perspNegZ(1,9, 0.7, w, h)
+        window.pending = requestAnimationFrame(timeStep_terrain)
+        animationId = window.pending
+    })
+    })
+}
+window.addEventListener('load', setup)
+</script>
+
+
+</head>
+<body>
+    <div class="display"><canvas width="500" height="500"></canvas></div>
+</body>
+</html>

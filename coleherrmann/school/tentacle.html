@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Tentacle demo</title>
+
+<!-- Matrix, shader setup, VAO setup -->
+<script src="cs418helpers.js"></script>
+
+<!-- The source code of a vertex shader directly in the HTML. The 'type=' command can have any value except "javascript" and just tells the browser not to try to run the code as javascript. -->
+<script id="vert" type="glsl">
+#version 300 es
+in vec4 position;
+in vec3 normal;
+out vec3 vNormal;
+uniform mat4 p;
+uniform mat4 v;
+uniform mat4 m1;
+uniform mat4 m2;
+uniform mat4 m3;
+in vec3 weight;
+in float albedo;
+out float vAlbedo;
+void main() {
+    vec4 pos = vec4(position);
+    pos.xyz += albedo * normal * 0.03;
+    gl_Position = p * v * (
+        (m1 * pos) * weight.x 
+        + (m2 * pos) * weight.y
+        + (m3 * pos) * weight.z);
+    gl_PointSize = 4.0;
+    vNormal = (mat3(m1) * normal) * weight.x 
+            + (mat3(m2) * normal) * weight.y
+            + (mat3(m3) * normal) * weight.z;
+    vAlbedo = albedo;
+}
+</script>
+
+
+<!-- The source code of a fragment shader. -->
+<script id="frag" type="glsl">
+#version 300 es
+precision highp float;
+uniform vec4 uColor;
+out vec4 fragColor;
+in vec3 vNormal;
+in float vAlbedo;
+const vec3 lightDir = vec3(.3,.8,.5);
+
+void main() {
+    float lambert = vAlbedo * abs(dot(vNormal, lightDir));
+    fragColor = vec4(uColor.rgb * lambert, uColor.a);
+}
+</script>
+
+
+<!-- All the other code in one big script element. -->
+<script>
+
+/**
+ * Draw one frame
+ */
+function draw() {
+    gl.clearColor(...IlliniBlue)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(program)
+
+    gl.bindVertexArray(geom.vao)
+
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'p'), false, p)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'v'), false, v)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'm1'), false, m1)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'm2'), false, m2)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'm3'), false, m3)
+
+    gl.cullFace(gl.BACK)
+    gl.uniform4fv(gl.getUniformLocation(program, 'uColor'), IlliniOrange)
+    gl.drawElements(geom.mode, geom.count, geom.type, 0)
+
+    gl.cullFace(gl.FRONT)
+    gl.uniform4fv(gl.getUniformLocation(program, 'uColor'), new Float32Array([0,.5,1,1]))
+    gl.drawElements(geom.mode, geom.count, geom.type, 0)
+}
+
+/**
+ * Compute any time-varying or animated aspects of the scene
+ */
+function timeStep(milliseconds) {
+    let seconds = milliseconds / 1000;
+    let viewAngle = 0//seconds/3
+    
+    window.v = m4view([2.5*Math.cos(viewAngle),2.5*Math.sin(viewAngle),1], [0,0,0], [0,0,1])
+    window.m1 = m4mult(m4translate(-2,0,0), m4rotZ(seconds),m4translate(-1.5,0,0))
+    window.m2 = m4mult(m1,m4rotY(seconds/3))
+    window.m3 = m4mult(m2,m4translate(-0.1,0,0),m4rotY(-seconds/3),m4translate(-0.5,0,0))
+
+    draw()
+    requestAnimationFrame(timeStep)
+}
+
+function makeGeometry(len, rad, n, rings) {
+    let data = {
+        "triangles":[],
+        "attributes":{
+            "position":[],
+            "normal":[],
+            "albedo":[],
+            "weight":[],
+        }
+    }
+    for(let i = 0; i <= rings; i += 1) {
+        let x = i * len / rings - len/2
+        let r = i * rad / rings
+        for(let j = 0; j < n; j+=1) {
+            let y = Math.cos(Math.PI*2*j/n)*r
+            let z = Math.sin(Math.PI*2*j/n)*r 
+            data.attributes.position.push([x,y,z])
+            data.attributes.normal.push(m4normalized([
+                -rad,
+                Math.cos(Math.PI*2*j/n)*len,
+                Math.sin(Math.PI*2*j/n)*len,
+              ]))
+            data.attributes.albedo.push([Math.random()])
+       
+            let x2 = x + len/4;
+            if (x2 < 0) data.attributes.weight.push([0,0,1])
+            else if (x < 0) data.attributes.weight.push([0,1,0])
+            else data.attributes.weight.push([1,0,0])
+
+/*
+            if (x2 < -r*2) data.attributes.weight.push([0,0,1])
+            else if (x < -r*2) data.attributes.weight.push([0,1])
+            else if (x > r*2) data.attributes.weight.push([1,0])
+            else data.attributes.weight.push([(x+r*2)/(4*r),1-(x+r*2)/(4*r)])
+*/       
+            let prevJ = j == 0 ? n-1 : j-1;
+            if (i > 0) {
+                data.triangles.push((i-1)*n+j, i*n+j, i*n+prevJ)
+                data.triangles.push((i-1)*n+j, i*n+prevJ, (i-1)*n+prevJ)
+            }
+            
+        }
+    }
+    return data;
+}
+
+/**
+ * Compile, link, set up geometry
+ */
+async function setup(event) {
+    window.gl = document.querySelector('canvas').getContext('webgl2',
+        // optional configuration object: see https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/getContext
+        {antialias: false, depth:true, preserveDrawingBuffer:true}
+    )
+    let vs = document.querySelector('#vert').textContent.trim()
+    let fs = document.querySelector('#frag').textContent.trim()
+    window.program = compileAndLinkGLSL(vs,fs)
+    gl.enable(gl.DEPTH_TEST)
+    gl.enable(gl.CULL_FACE)
+    
+    let data = makeGeometry(3, 0.5, 12, 20)
+    window.geom = setupGeomery(data, program)
+
+    window.addEventListener('resize', event => {
+        fillScreen((w,h) => {
+            window.p = m4perspNegZ(1,9, 0.7, w, h)
+            gl.viewport(0,0, w, h)
+            requestAnimationFrame(timeStep)
+        })
+    })
+    window.dispatchEvent(new Event('resize'))
+}
+
+window.addEventListener('load',setup)
+</script>
+<style>
+    html,body,canvas { margin: 0; padding: 0; border: none; }
+</style>
+</head>
+<body><canvas width="500" height="500"></canvas></body>
+</html>

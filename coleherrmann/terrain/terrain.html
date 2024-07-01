@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>CS 418 Terrain project</title>
+    <script src="scene-option-tree.js"></script><!-- handles controls -->
+    <script src="cs418helpers.js"></script><!-- handles controls -->
+
+<script>// configures controls
+/**
+ * Modify this object to chose what options you want in the control pane.
+ * Top-level entries become top-section radio buttons.
+ * Nested entries become lower-section inputs of various types.
+ */
+var controlOptions =
+  {"terrain":
+    {"label":"Required: Faulting-method terrain"
+    ,"options":
+      {"resolution":{"type":"number","default":200,"label":"Grid size"}
+      ,"slices":{"type":"number","default":1000,"label":"Fractures"}
+      ,"zoom":{"type":"number","default":3,"label":"Zoom"}
+      
+      }
+    }
+    ,"Curious George":
+    {"label":"Unhappy and Emo Curious George"
+    }
+    
+  }
+</script>
+
+
+<script>// Placeholder script; edit or move to separate file
+
+
+//Global animation id for switching animations
+var animationId;
+
+//Sets perspective for monkey animation
+function fillScreen_monkey() {
+    let canvas = document.querySelector('canvas')
+    document.body.style.margin = '0'
+    canvas.style.width = '100vw'
+    canvas.style.height = '100vh'
+    canvas.width = canvas.clientWidth
+    canvas.height = canvas.clientHeight
+    canvas.style.width = ''
+    canvas.style.height = ''
+    window.p = m4perspNegZ(1,9, 0.7, canvas.width, canvas.height)
+    if (window.gl) {
+        gl.viewport(0,0, canvas.width, canvas.height)
+        window.p = m4perspNegZ(1,9, 0.4, gl.canvas.width, gl.canvas.height)
+        draw_monkey()
+    }
+}
+
+//calculates dot product
+function dotProduct(a,b){
+  const result = a.reduce((acc, cur, index)=>{
+    acc += (cur * b[index]);
+    return acc;
+  }, 0);
+  return result;
+}
+
+//Generates faults by looping over z axis and altering z coordinates
+//Lots of code commented out for my attempt to do distance based fault weighting, which didn't work
+//Calculating the intersection point was suprisingly hard
+function generate_faults(data) {
+    //generate random point and vector
+
+    let position = [Math.random()*glresolution, Math.random()*glresolution]
+    let angle = Math.random() * 2 * Math.PI
+
+    let vec = [Math.cos(angle), Math.sin(angle)]
+
+   // let vec2 = [Math.sin(angle), -Math.cos(angle)]
+
+    //let position1 = [position[0]+-glresolution*vec[0]*2,position[1]+-glresolution*vec[1]*2]
+    //let position2 = [position[0]+glresolution*vec[0]*2,position[1]+glresolution*vec[1]*2]
+
+    //Keep track of smallest and largest z values, and print them to the console.
+    
+    for (let i=0; i<data.attributes.position.length; i+=1) {
+        let p = data.attributes.position[i]
+        
+        //let p1 = [p[0]+-glresolution*vec2[0]*2,p[1]+-glresolution*vec2[1]*2]
+        //let p2 = [p[0]+glresolution*vec2[0]*2,p[1]+glresolution*vec2[1]*2]
+
+      //  let intersection = math.intersect(p1, p2, position1, position2)
+
+        //let distance = math.sqrt(math.pow((intersection[1]-p[1]),2)+ math.pow((intersection[0]-p[0]),2))
+
+        //let r = math.pow((1-math.pow(distance/glresolution,2)),2)
+        let subtrand = [data.attributes.position[i][0]-position[0], data.attributes.position[i][1]-position[1]]
+
+        let side = dotProduct(subtrand, vec)
+
+        if (side>0.0) { //Side one of the fault
+            data.attributes.position[i][2] += .25 /window.slices/1.9
+        }
+        else {
+            data.attributes.position[i][2] -= .25 /window.slices/1.9
+        }
+        if (data.attributes.position[i][2] > z_max) z_max = data.attributes.position[i][2]
+
+        if (data.attributes.position[i][2] < z_min) z_min = data.attributes.position[i][2]
+
+        
+    }
+
+}
+
+//Adds normal attribute for lighting effects
+function addNormals(data) {
+    let normals = new Array(data.attributes.position.length)
+    for(let i=0; i<normals.length; i+=1) normals[i] = new Array(3).fill(0)
+    for([i0,i1,i2] of data.triangles) {
+        // find the vertex positions
+        let p0 = data.attributes.position[i0]
+        let p1 = data.attributes.position[i1]
+        let p2 = data.attributes.position[i2]
+        // find the edge vectors and normal
+        let e0 = m4sub(p0,p2)
+        let e1 = m4sub(p1,p2)
+        let n = m4cross(e0,e1)
+        // loop over x, y and z
+        for(let j=0; j<3; j+=1) {
+            // add a coordinate of a normal to each of the three normals
+            normals[i0][j] += n[j]
+            normals[i1][j] += n[j]
+            normals[i2][j] += n[j]
+        }
+    }
+    for(let i=0; i<normals.length; i+=1) normals[i] = m4normalized(normals[i])
+    data.attributes.normal = normals;
+}
+
+/**
+ * Draw one frame for terrain simulation
+ */
+ function draw_blank() {
+    gl.clearColor(...IlliniBlue)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(program)
+
+    gl.bindVertexArray(geom.vao)
+   
+    gl.uniform1f(gl.getUniformLocation(program, 'glresolution'),(glresolution))
+
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'p'), false, p)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'mv'), false, m4mult(v,m))
+
+
+    gl.drawElements(geom.mode, geom.count, geom.type, 0)
+}
+
+function timeStep_terrain(milliseconds) {
+    let seconds = milliseconds / 1000;
+    
+    let viewAngle = seconds/5
+    let s2 = Math.cos(seconds/2)-1
+
+    window.v = m4mult(m4view([3*Math.cos(viewAngle),3*Math.sin(viewAngle),2], [0,0,0], [0,0,1]), m4scale(zoom_attrib))
+    let eye = [3*Math.cos(viewAngle),3*Math.sin(viewAngle),1]
+    gl.useProgram(program)
+
+    gl.uniform3fv(gl.getUniformLocation(program, 'eyedir'), new Float32Array(m4normalized(eye)))
+
+    draw_blank()
+    animationId = requestAnimationFrame(timeStep_terrain)
+}
+
+/**
+ * Draw one frame of the monkey animation
+ */
+ function draw_monkey() {
+    gl.clearColor(...IlliniBlue) // f(...[1,2,3]) means f(1,2,3)
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+    gl.useProgram(program)
+
+    gl.bindVertexArray(geom.vao)
+
+    gl.uniform4fv(gl.getUniformLocation(program, 'color'), IlliniOrange)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'p'), false, p)
+    gl.uniformMatrix4fv(gl.getUniformLocation(program, 'mv'), false, m4mult(v,m))
+    gl.drawElements(geom.mode, geom.count, geom.type, 0)
+
+}
+
+/**
+ * Compute any time-varying or animated aspects of the scene
+ */
+ function timeStep_monkey(milliseconds) {
+    let seconds = milliseconds / 1000;
+    let s2 = Math.cos(seconds/2)-1
+    
+    let eye = [3*Math.cos(s2),3*Math.sin(s2),1];
+    window.v = m4view([3*Math.cos(s2),3*Math.sin(s2),1], [0,0,0], [0,0,1])
+    gl.uniform3fv(gl.getUniformLocation(program, 'eyedir'), new Float32Array(m4normalized(eye)))
+
+    draw_monkey()
+    animationId = requestAnimationFrame(timeStep_monkey)
+}
+
+
+/**
+ * Compile, link, other option-independent setup
+ */
+async function setup(event) {
+    window.gl = document.querySelector('canvas').getContext('webgl2',
+        // optional configuration object: see https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/getContext
+        {antialias: false, depth:true, preserveDrawingBuffer:true}
+    )
+    // to do: more setup here
+    fillScreen()
+}
+
+async function switcher(scene, options) {
+    cancelAnimationFrame(animationId)
+
+    window.gl = document.querySelector('canvas').getContext('webgl2',
+        {antialias: false, depth:true, preserveDrawingBuffer:true})       // optional configuration object: see https://developer.mozilla.org/en-US/docs/Web/API/HTMLCanvasElement/getContext
+    
+    if (scene == 'terrain') {
+        let vs = await fetch('blank/vs.glsl').then(res => res.text())
+        let fs = await fetch('blank/fs.glsl').then(res => res.text())
+        program = compileAndLinkGLSL(vs,fs)
+        //General Layout for terrain to be generated
+
+        gl.enable(gl.DEPTH_TEST)
+
+        window.m = m4ident()
+        window.v = m4ident()
+        window.p = m4ident()
+
+        let data = {
+            "triangles":[]
+            ,"attributes":{
+                "position":[]
+            }
+        }
+        
+        let n = options.resolution
+
+        for (let i=0; i <= options.resolution; i+=1) {
+            for (let j=0; j <= options.resolution; j+=1) {
+                //data.attributes.position.push([i,j, .5*(Math.random()), 1])
+                data.attributes.position.push([i,j,.5,1])
+            }   
+        }
+        //Using J as the offset to balance rows
+        let j = 0
+        for (let i=0; i<options.resolution*options.resolution+(options.resolution-1); i+=1) {
+            if ((i+j)%(n)==0 && i != 0 && i != 1) {
+             j-=1
+             i+=1
+            }
+            data.triangles.push([i+n+1,i+1,i])
+            data.triangles.push([i+n+2,i+n+1,i+1])
+
+
+        }
+        window.glresolution = n
+        window.z_min = .5
+        window.z_max = .5
+
+        for (window.slices = 1; window.slices<=options.slices; window.slices+=1){
+            generate_faults(data)
+        }
+
+        console.log("Z_max: ", z_max, "Z_min: ", z_min)
+
+        addNormals(data)
+        window.geom = setupGeomery(data, program)
+
+        //window.gridsize = options.speed
+        window.zoom_attrib = options.zoom
+      
+
+        fillScreen((w,h) => {            
+            gl.viewport(0,0, w, h)
+            window.p = m4perspNegZ(1,9, 0.7, w, h)
+            window.pending = requestAnimationFrame(timeStep_terrain)
+            animationId = window.pending
+        })
+
+
+        window.addEventListener('resize', event => {
+        fillScreen((w,h) => {            
+            gl.viewport(0,0, w, h)
+            window.p = m4perspNegZ(1,9, 0.7, w, h)
+            window.pending = requestAnimationFrame(timeStep_terrain)
+            animationId = window.pending
+        })
+        })
+        
+       
+    }
+    if (scene == 'Curious George') {
+        let vs = await fetch('monkey/vs.glsl').then(res => res.text())
+        let fs = await fetch('monkey/fs.glsl').then(res => res.text())
+        program = compileAndLinkGLSL(vs,fs)
+
+        gl.enable(gl.DEPTH_TEST)
+
+        window.m = m4ident()
+        window.v = m4ident()
+        window.p = m4ident()
+        
+        let data = await fetch('monkey/monkey.json').then(r=>r.json())
+        addNormals(data)
+
+        window.geom = setupGeomery(data, program)
+
+        animationId = requestAnimationFrame(timeStep_monkey)
+        fillScreen_monkey()
+    }
+}
+
+/**
+ * Generate geometry, render the scene
+ */
+async function setupScene(scene, options) {
+    console.log("To do: render",scene,"with options",options)
+    switcher(scene, options)
+}
+
+window.addEventListener('load', setup)
+</script>
+
+<!-- DO NOT MODIFY anything below this line -->
+<style>
+    body { margin: 0; border: none; padding: 0; display: flex; }
+    .controls {
+        width: min(50%, 20em); padding: 1em;
+        flex: 0 0 min(50%, 20em);
+    }
+    .controls label { display: block; }
+    .display {
+        flex-grow: 1; height: 100vh;
+        line-height: 0rem;
+    }
+</style>
+</head>
+<body>
+    <div class="controls">
+        <form>
+        <div id="set1"></div>
+        <hr/>
+        <div id="set2"></div>
+        <hr/>
+        <input type="submit" value="Generate object"/>
+        </form>
+    </div>
+    <div class="display"><canvas width="500" height="500"></canvas></div>
+</body>
+</html>
